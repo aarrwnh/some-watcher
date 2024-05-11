@@ -9,6 +9,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use crate::watcher::QueueTask;
+
 pub trait Module {
     fn resolve(&self, src: PathBuf, dest: PathBuf) -> Resolved;
 }
@@ -27,19 +29,12 @@ pub enum Resolved {
     None,
 }
 
-/// Internal
-#[derive(Debug)]
-pub(crate) enum QueueTask {
-    Move { src: PathBuf, dest: PathBuf },
-    Print(PathBuf),
-    Msg(String),
-    None,
-}
-
-#[derive(Clone)]
-pub enum WatchingKind {
+#[derive(Clone, Default)]
+pub(crate) enum WatchingKind {
     Files,
     Dirs,
+    #[default]
+    All,
 }
 
 #[derive(Clone, Default)]
@@ -49,9 +44,9 @@ pub struct ActionBuilder {
     /// TODO: maybe later for crossterm
     description: Option<&'static str>,
     /// A [`WatchingKind`] to filter watch events
-    pub watched_types: Option<WatchingKind>,
+    pub(crate) watched_types: WatchingKind,
     /// [`EventKind`]
-    pub events: Option<Box<Arc<Mutex<dyn Fn(EventKind) -> bool + Send + 'static>>>>,
+    pub(crate) events: Option<Box<Arc<Mutex<dyn Fn(EventKind) -> bool + Send + 'static>>>>,
     /// Destination path
     dest: Option<PathBuf>,
     /// Regexp pattern
@@ -81,7 +76,7 @@ impl ActionBuilder {
         self
     }
 
-    /// For log printing
+    /// For log printing?
     pub fn set_label(mut self, s: &'static str) -> Self {
         self.label.replace(s);
         self
@@ -94,12 +89,12 @@ impl ActionBuilder {
     }
 
     pub fn watch_files(mut self) -> Self {
-        self.watched_types.replace(WatchingKind::Files);
+        self.watched_types = WatchingKind::Files;
         self
     }
 
     pub fn watch_dirs(mut self) -> Self {
-        self.watched_types.replace(WatchingKind::Dirs);
+        self.watched_types = WatchingKind::Dirs;
         self
     }
 
@@ -154,7 +149,6 @@ impl ActionParser for ActionBuilder {
         dest.push(src.file_name()?);
 
         if let Some(x) = &self.inner {
-            #[allow(clippy::single_match)]
             // format destination path in the inner
             match x.lock().unwrap().resolve(src.clone(), dest.clone()) {
                 Resolved::Move { dest: mut new_path } => {

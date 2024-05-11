@@ -14,6 +14,15 @@ use std::{
 
 use crate::*;
 
+/// Internal
+#[derive(Debug)]
+pub(crate) enum QueueTask {
+    Move { src: PathBuf, dest: PathBuf },
+    Print(PathBuf),
+    Msg(String),
+    None,
+}
+
 #[derive(Default, Debug)]
 pub struct Config {
     /// Location for duplicate files for later inspection
@@ -104,10 +113,6 @@ impl Watch {
     }
 
     fn watch_one(&self, scheduler: &Sender<QueueTask>, rule: &Rule) -> notify::Result<()> {
-        let (tx, rx) = mpsc::channel();
-        let mut debouncer = new_debouncer(Duration::from_secs(2), None, tx)?;
-        let watcher = debouncer.watcher();
-
         let mut src_path = rule.src_path.to_path_buf();
         let recursive_mode = if src_path.ends_with("*") {
             src_path.pop(); // remove *
@@ -116,7 +121,9 @@ impl Watch {
             RecursiveMode::NonRecursive
         };
 
-        watcher.watch(&src_path, recursive_mode)?;
+        let (tx, rx) = mpsc::channel();
+        let mut debouncer = new_debouncer(Duration::from_secs(2), None, tx)?;
+        debouncer.watcher().watch(&src_path, recursive_mode)?;
 
         for result in rx {
             match result {
@@ -132,12 +139,12 @@ impl Watch {
                                 continue;
                             }
 
-                            assert_eq!(event.paths.len(), 1, "renaming files event encountered");
+                            assert!(event.paths.len() == 1, "renaming files event encountered");
 
                             for path in &event.paths {
                                 match action.watched_types {
-                                    Some(WatchingKind::Dirs) if !path.is_dir() => continue,
-                                    Some(WatchingKind::Files) if !path.is_file() => continue,
+                                    WatchingKind::Dirs if !path.is_dir() => continue,
+                                    WatchingKind::Files if !path.is_file() => continue,
                                     _ => {}
                                 }
                                 if let Some(f) = action.parse(path.clone()) {

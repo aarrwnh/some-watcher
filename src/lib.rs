@@ -13,7 +13,7 @@ macro_rules! color {
     };
 }
 
-pub trait Printable {
+pub(crate) trait Printable {
     /// Prepare path for display
     fn print(&self) -> String;
 }
