@@ -13,12 +13,12 @@ macro_rules! color {
     };
 }
 
-pub(crate) trait Printable {
-    /// Prepare path for display
+pub trait PrintablePath {
+    /// Prepares path for display
     fn print(&self) -> String;
 }
 
-impl Printable for std::path::PathBuf {
+impl PrintablePath for std::path::PathBuf {
     fn print(&self) -> String {
         let sep = color!("38;5;238", '/');
         let s = self.to_string_lossy();

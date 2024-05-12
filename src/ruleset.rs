@@ -1,6 +1,9 @@
 #![allow(clippy::type_complexity)]
 
-use notify::*;
+use notify::{
+    event::{ModifyKind, RenameMode},
+    *,
+};
 use notify_debouncer_full::*;
 use regex::Regex;
 
@@ -21,15 +24,17 @@ pub enum Resolved {
     Move {
         dest: PathBuf,
     },
-    Print(PathBuf),
-    Msg(String),
+    Path(PathBuf),
+    Info(String),
+    Ok(String),
+    Err(String),
     /// default move file
     Continue,
     /// do nothing
     None,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub(crate) enum WatchingKind {
     Files,
     Dirs,
@@ -38,7 +43,7 @@ pub(crate) enum WatchingKind {
 }
 
 #[derive(Clone, Default)]
-pub struct ActionBuilder {
+pub struct Job {
     /// Label to display with print
     label: Option<&'static str>,
     /// TODO: maybe later for crossterm
@@ -57,7 +62,11 @@ pub struct ActionBuilder {
 
 const NO_DESCRIPTION: &str = "no description";
 
-impl ActionBuilder {
+impl Job {
+    pub fn builder() -> Self {
+        Self::default()
+    }
+
     pub fn set_path_match_pattern(mut self, m: &str) -> Self {
         let a = Regex::new(m).unwrap();
         self.match_pattern.replace(a);
@@ -88,17 +97,17 @@ impl ActionBuilder {
         self
     }
 
-    pub fn watch_files(mut self) -> Self {
+    pub const fn watch_files(mut self) -> Self {
         self.watched_types = WatchingKind::Files;
         self
     }
 
-    pub fn watch_dirs(mut self) -> Self {
+    pub const fn watch_dirs(mut self) -> Self {
         self.watched_types = WatchingKind::Dirs;
         self
     }
 
-    pub fn watch_all(self) -> Self {
+    pub const fn watch_all(self) -> Self {
         self
     }
 
@@ -115,20 +124,30 @@ impl ActionBuilder {
         self.on_kind_match(|kind| matches!(kind, EventKind::Modify(_)))
     }
 
+    pub fn watch_rename_event(self) -> Self {
+        self.on_kind_match(|kind| {
+            matches!(
+                kind,
+                EventKind::Modify(ModifyKind::Name(RenameMode::To))
+                    | EventKind::Modify(ModifyKind::Name(RenameMode::Both))
+            )
+        })
+    }
+
     pub fn with_callback(mut self, callback: impl Module + Send + 'static) -> Self {
         self.inner.replace(Box::new(Arc::new(Mutex::new(callback))));
         self
     }
 }
 
-pub(crate) trait ActionParser {
+pub(crate) trait JobParser {
     fn parse(&self, src: PathBuf) -> Option<QueueTask>;
 
     #[allow(dead_code)]
     fn short(&self) -> &str;
 }
 
-impl ActionParser for ActionBuilder {
+impl JobParser for Job {
     #[allow(dead_code)]
     fn short(&self) -> &str {
         match &self.description {
@@ -154,11 +173,18 @@ impl ActionParser for ActionBuilder {
                 Resolved::Move { dest: mut new_path } => {
                     std::mem::swap(&mut dest, &mut new_path);
                 }
-                Resolved::Print(path) => return Some(QueueTask::Print(path)),
-                Resolved::Msg(msg) => return Some(QueueTask::Msg(msg)),
+                Resolved::Path(path) => return Some(QueueTask::Path(path)),
+                Resolved::Info(msg) => return Some(QueueTask::Info(msg)),
+                Resolved::Ok(msg) => return Some(QueueTask::Ok(msg)),
+                Resolved::Err(msg) => return Some(QueueTask::Err(msg)),
                 Resolved::None => return Some(QueueTask::None),
                 Resolved::Continue => {}
             }
+        }
+
+        // TODO: handle folders (atm, can be handled in each module)
+        if self.watched_types == WatchingKind::Dirs {
+            return Some(QueueTask::Path(src));
         }
 
         if src.cmp(&dest) == std::cmp::Ordering::Equal {
@@ -174,36 +200,32 @@ impl ActionParser for ActionBuilder {
 // ----------------------------------------------------------------------------------
 //   - Rule -
 // ----------------------------------------------------------------------------------
-pub trait Ruler {
-    fn add(self, action: ActionBuilder) -> Self;
-}
 
 #[derive(Clone)]
 pub struct Rule {
     pub src_path: PathBuf,
-    pub actions: Vec<ActionBuilder>,
+    pub jobs: Vec<Job>,
 }
 
 impl Rule {
-    pub fn new(src_path: PathBuf) -> Self {
+    pub const fn new(src_path: PathBuf) -> Self {
         Self {
             src_path,
-            actions: Vec::new(),
+            jobs: Vec::new(),
         }
     }
-}
 
-impl Ruler for Rule {
-    fn add(mut self, mut action: ActionBuilder) -> Self {
-        if action.events.is_none() {
+    #[allow(clippy::should_implement_trait)]
+    pub fn add(mut self, mut job: Job) -> Self {
+        if job.events.is_none() {
             panic!(
                 "required watch event for {} action missing ",
-                action.label.unwrap()
+                job.label.unwrap()
             );
         }
 
         // assert destination path
-        match action.dest.clone() {
+        match job.dest.clone() {
             Some(dest) => {
                 if cfg!(target_os = "windows") {
                     let mut src_path = self.src_path.clone();
@@ -221,18 +243,18 @@ impl Ruler for Rule {
                         if n != p {
                             let mut new_dest = PathBuf::from(&src_path);
                             new_dest.push(n);
-                            action.dest.replace(new_dest);
+                            job.dest.replace(new_dest);
                         }
                     };
                 }
             }
             // use root watching path if empty
             None => {
-                action.dest.replace(self.src_path.to_path_buf());
+                job.dest.replace(self.src_path.to_path_buf());
             }
         };
 
-        self.actions.push(action);
+        self.jobs.push(job);
         self
     }
 }

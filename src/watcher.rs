@@ -18,9 +18,25 @@ use crate::*;
 #[derive(Debug)]
 pub(crate) enum QueueTask {
     Move { src: PathBuf, dest: PathBuf },
-    Print(PathBuf),
-    Msg(String),
+    Path(PathBuf),
+    Info(String),
+    Ok(String),
+    Err(String),
     None,
+}
+
+impl QueueTask {
+    #[inline]
+    fn print(self) {
+        match self {
+            Self::Move { .. } => todo!(),
+            Self::Path(src) => println!(" {}  {}", color!(33, ""), src.print()),
+            Self::Info(msg) => println!(" {}  {}", color!(37, ""), msg),
+            Self::Ok(msg) => println!(" {}  {}", color!(32, ""), msg),
+            Self::Err(msg) => println!(" {}  {}", color!(31, ""), msg),
+            Self::None => todo!(),
+        }
+    }
 }
 
 #[derive(Default, Debug)]
@@ -72,12 +88,11 @@ impl Watch {
     fn handle_task(&self, task: QueueTask) {
         // log::info!("{:?}", task);
         match task {
-            QueueTask::Msg(msg) => {
-                println!(" {} {}", color!(37, ""), msg);
-            }
-            QueueTask::Print(src) => {
-                println!(" {}  {}", color!(33, ""), src.print());
-            }
+            q @ QueueTask::Err(_)
+            | q @ QueueTask::Ok(_)
+            | q @ QueueTask::Info(_)
+            | q @ QueueTask::Path(_) => q.print(),
+
             QueueTask::Move { src, mut dest } => {
                 // TODO: what to do with this?
                 // if dest.to_string_lossy().len() > 300 {
@@ -102,9 +117,9 @@ impl Watch {
                 }
 
                 match fs::rename(&src, &dest) {
-                    Ok(_) => println!(" {}  {}", color!(32, ""), dest.print()),
+                    Ok(_) => QueueTask::Ok(dest.print()).print(),
                     Err(err) => {
-                        println!(" {}  {}  {}", color!(33, ""), src.print(), color!(31, err))
+                        QueueTask::Err(format!("{}  {}", src.print(), color!(31, err))).print();
                     }
                 }
             }
@@ -129,27 +144,25 @@ impl Watch {
             match result {
                 Ok(events) => {
                     events.iter().for_each(move |event| {
-                        for action in &rule.actions {
-                            let action_check = match action.events.as_ref() {
+                        // dbg!(event);
+                        for action in &rule.jobs {
+                            let event_check = match action.events.as_ref() {
                                 None => continue,
-                                Some(me) => me,
+                                Some(me) => me.lock().unwrap(),
                             };
 
-                            if !action_check.lock().unwrap()(event.kind) {
+                            if !event_check(event.kind) {
                                 continue;
                             }
 
-                            assert!(event.paths.len() == 1, "renaming files event encountered");
-
-                            for path in &event.paths {
-                                match action.watched_types {
-                                    WatchingKind::Dirs if !path.is_dir() => continue,
-                                    WatchingKind::Files if !path.is_file() => continue,
-                                    _ => {}
-                                }
-                                if let Some(f) = action.parse(path.clone()) {
-                                    scheduler.send(f).unwrap();
-                                }
+                            let path = event.paths.last().unwrap();
+                            match action.watched_types {
+                                WatchingKind::Dirs if !path.is_dir() => continue,
+                                WatchingKind::Files if !path.is_file() => continue,
+                                _ => {}
+                            }
+                            if let Some(f) = action.parse(path.clone()) {
+                                scheduler.send(f).unwrap();
                             }
                         }
                     });

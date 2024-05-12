@@ -8,7 +8,7 @@ fn main() -> Result<()> {
     });
 
     app.start(&[watch_location(r"d:\Desktop").add(
-        ActionBuilder::default()
+        Job::builder()
             .watch_modified_event()
             .watch_files()
             .with_callback(zip::Zips)
