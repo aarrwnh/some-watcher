@@ -156,8 +156,11 @@ impl JobParser for Job {
         }
     }
 
-    /// Main parser
     fn parse(&self, src: PathBuf) -> Option<QueueTask> {
+        if src.extension().unwrap() == "part" {
+            return Some(QueueTask::None);
+        }
+
         // filter events only if regex pattern match was provided
         if let Some(re) = &self.match_pattern {
             let hay = src.to_str()?;
