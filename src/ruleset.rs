@@ -18,7 +18,7 @@ pub trait Module {
     fn resolve(&self, src: PathBuf, dest: PathBuf) -> Resolved;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 #[non_exhaustive]
 pub enum Resolved {
     Move {
@@ -28,9 +28,10 @@ pub enum Resolved {
     Info(String),
     Ok(String),
     Err(String),
-    /// default move file
+    /// continue with default move file
     Continue,
     /// do nothing
+    #[default]
     None,
 }
 

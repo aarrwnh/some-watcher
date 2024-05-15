@@ -26,7 +26,6 @@ pub(crate) enum QueueTask {
 }
 
 impl QueueTask {
-    #[inline]
     fn print(self) {
         match self {
             Self::Move { .. } => todo!(),
@@ -45,6 +44,10 @@ pub struct Config {
     pub dump_folder: PathBuf,
     // TODO: naybe
     // ignore_path_length: bool,
+
+    // debouncer:
+    pub timeout: Option<Duration>,
+    pub tick_rate: Option<Duration>,
 }
 
 pub struct Watch {
@@ -52,10 +55,13 @@ pub struct Watch {
 }
 
 impl Watch {
-    pub fn new(config: Config) -> Self {
+    pub fn new(mut config: Config) -> Self {
         let dump_folder = &config.dump_folder;
         if dump_folder.try_exists().is_err() {
             std::fs::create_dir_all(dump_folder).expect("should create new dump folder");
+        }
+        if config.timeout.is_none() {
+            config.timeout.replace(Duration::from_secs(2));
         }
         Self { config }
     }
@@ -137,7 +143,11 @@ impl Watch {
         };
 
         let (tx, rx) = mpsc::channel();
-        let mut debouncer = new_debouncer(Duration::from_secs(2), None, tx)?;
+        let mut debouncer = new_debouncer(
+            self.config.timeout.expect("self.timeout"),
+            self.config.tick_rate,
+            tx,
+        )?;
         debouncer.watcher().watch(&src_path, recursive_mode)?;
 
         for result in rx {
