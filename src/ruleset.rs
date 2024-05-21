@@ -125,6 +125,10 @@ impl Job {
         self.set_event(|kind| matches!(kind, EventKind::Modify(_)))
     }
 
+    pub fn on_create(self) -> Self {
+        self.set_event(|kind| matches!(kind, EventKind::Create(_)))
+    }
+
     pub fn on_rename(self) -> Self {
         self.set_event(|kind| {
             matches!(
