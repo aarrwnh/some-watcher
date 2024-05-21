@@ -158,7 +158,7 @@ impl JobParser for Job {
     }
 
     fn parse(&self, src: PathBuf) -> Option<QueueTask> {
-        if src.extension().unwrap() == "part" {
+        if src.extension().is_some_and(|e| e == "part") {
             return Some(QueueTask::None);
         }
 
