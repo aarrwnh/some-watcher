@@ -52,7 +52,7 @@ pub struct Job {
     /// A [`WatchingKind`] to filter watch events
     pub(crate) watched_types: WatchingKind,
     /// [`EventKind`]
-    pub(crate) events: Option<Box<Arc<Mutex<dyn Fn(EventKind) -> bool + Send + 'static>>>>,
+    pub(crate) events: Option<Box<Arc<Mutex<dyn (Fn(EventKind) -> bool) + Send + 'static>>>>,
     /// Destination path
     dest: Option<PathBuf>,
     /// Regexp pattern
@@ -112,7 +112,7 @@ impl Job {
         self
     }
 
-    pub fn on_kind_match(
+    fn set_event(
         mut self,
         callback: impl (Fn(EventKind) -> bool) + Send + 'static,
     ) -> Self {
@@ -121,12 +121,12 @@ impl Job {
         self
     }
 
-    pub fn watch_modified_event(self) -> Self {
-        self.on_kind_match(|kind| matches!(kind, EventKind::Modify(_)))
+    pub fn on_modified(self) -> Self {
+        self.set_event(|kind| matches!(kind, EventKind::Modify(_)))
     }
 
-    pub fn watch_rename_event(self) -> Self {
-        self.on_kind_match(|kind| {
+    pub fn on_rename(self) -> Self {
+        self.set_event(|kind| {
             matches!(
                 kind,
                 EventKind::Modify(ModifyKind::Name(RenameMode::To))
