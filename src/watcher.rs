@@ -25,6 +25,11 @@ pub(crate) enum QueueTask {
     None,
 }
 
+struct Schedule<'event> {
+    job: &'event Job,
+    path: PathBuf,
+}
+
 impl QueueTask {
     fn print(self) {
         match self {
@@ -54,7 +59,7 @@ pub struct Watch {
     config: Config,
 }
 
-impl Watch {
+impl<'event> Watch {
     pub fn new(mut config: Config) -> Self {
         let dump_folder = &config.dump_folder;
         if dump_folder.try_exists().is_err() {
@@ -67,7 +72,7 @@ impl Watch {
     }
 
     pub fn start(&self, rules: &[Rule]) -> notify::Result<()> {
-        let (queue_tx, queue_rx) = mpsc::channel::<QueueTask>();
+        let (queue_tx, queue_rx) = mpsc::channel::<Schedule>();
         thread::scope(|s| {
             // create watchers for each directory
             rules.iter().for_each(|rule| {
@@ -84,14 +89,18 @@ impl Watch {
 
             thread::Builder::new()
                 .spawn_scoped(s, move || {
-                    queue_rx.iter().for_each(|task| self.handle_task(task));
+                    queue_rx.iter().for_each(|Schedule { job, path }| {
+                        if let Some(f) = job.parse(path.clone()) {
+                            self.handle_move_task(f);
+                        }
+                    });
                 })
                 .unwrap();
         });
         Ok(())
     }
 
-    fn handle_task(&self, task: QueueTask) {
+    fn handle_move_task(&self, task: QueueTask) {
         // log::info!("{:?}", task);
         match task {
             q @ QueueTask::Err(_)
@@ -133,7 +142,11 @@ impl Watch {
         }
     }
 
-    fn watch_one(&self, scheduler: &Sender<QueueTask>, rule: &Rule) -> notify::Result<()> {
+    fn watch_one(
+        &self,
+        scheduler: &Sender<Schedule<'event>>,
+        rule: &'event Rule,
+    ) -> notify::Result<()> {
         let mut src_path = rule.src_path.to_path_buf();
         let recursive_mode = if src_path.ends_with("*") {
             src_path.pop(); // remove *
@@ -153,10 +166,10 @@ impl Watch {
         for result in rx {
             match result {
                 Ok(events) => {
-                    events.iter().for_each(move |event| {
+                    events.iter().for_each(|event| {
                         // dbg!(event);
-                        for action in &rule.jobs {
-                            let event_check = match action.events.as_ref() {
+                        for job in &rule.jobs {
+                            let event_check = match job.events.as_ref() {
                                 None => continue,
                                 Some(me) => me.lock().unwrap(),
                             };
@@ -166,14 +179,18 @@ impl Watch {
                             }
 
                             let path = event.paths.last().unwrap();
-                            match action.watched_types {
+                            match job.watched_types {
                                 WatchingKind::Dirs if !path.is_dir() => continue,
                                 WatchingKind::Files if !path.is_file() => continue,
                                 _ => {}
                             }
-                            if let Some(f) = action.parse(path.clone()) {
-                                scheduler.send(f).unwrap();
-                            }
+
+                            scheduler
+                                .send(Schedule {
+                                    job,
+                                    path: path.clone(),
+                                })
+                                .unwrap();
                         }
                     });
                 }
