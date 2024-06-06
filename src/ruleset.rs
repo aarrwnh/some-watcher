@@ -146,7 +146,7 @@ impl Job {
 }
 
 pub(crate) trait JobParser {
-    fn parse(&self, src: PathBuf) -> Option<QueueTask>;
+    fn parse(&self, src: PathBuf) -> QueueTask;
 
     #[allow(dead_code)]
     fn short(&self) -> &str;
@@ -161,19 +161,22 @@ impl JobParser for Job {
         }
     }
 
-    fn parse(&self, src: PathBuf) -> Option<QueueTask> {
+    fn parse(&self, src: PathBuf) -> QueueTask {
         if src.extension().is_some_and(|e| e == "part") {
-            return Some(QueueTask::None);
+            return QueueTask::None;
         }
 
         // filter events only if regex pattern match was provided
         if let Some(re) = &self.match_pattern {
-            let hay = src.to_str()?;
-            re.captures(hay)?;
+            let hay = src.to_str().unwrap();
+            match re.captures(hay) {
+                Some(_) => {},
+                None => return QueueTask::None,
+            };
         }
 
-        let mut dest = self.dest.as_ref()?.clone();
-        dest.push(src.file_name()?);
+        let mut dest = self.dest.as_ref().unwrap().clone();
+        dest.push(src.file_name().unwrap());
 
         if let Some(x) = &self.inner {
             // format destination path in the inner
@@ -181,27 +184,27 @@ impl JobParser for Job {
                 Resolved::Move { dest: mut new_path } => {
                     std::mem::swap(&mut dest, &mut new_path);
                 }
-                Resolved::Path(path) => return Some(QueueTask::Path(path)),
-                Resolved::Info(msg) => return Some(QueueTask::Info(msg)),
-                Resolved::Ok(msg) => return Some(QueueTask::Ok(msg)),
-                Resolved::Err(msg) => return Some(QueueTask::Err(msg)),
-                Resolved::None => return Some(QueueTask::None),
+                Resolved::Path(path) => return QueueTask::Path(path),
+                Resolved::Info(msg) => return QueueTask::Info(msg),
+                Resolved::Ok(msg) => return QueueTask::Ok(msg),
+                Resolved::Err(msg) => return QueueTask::Err(msg),
+                Resolved::None => return QueueTask::None,
                 Resolved::Continue => {}
             }
         }
 
         // TODO: handle folders (atm, can be handled in each module)
         if self.watched_types == WatchingKind::Dirs {
-            return Some(QueueTask::Path(src));
+            return QueueTask::Path(src);
         }
 
         if src.cmp(&dest) == std::cmp::Ordering::Equal {
             // if paths are the same, as that will obviously should do nothing
-            return Some(QueueTask::None);
+            return QueueTask::None;
         }
 
         assert!(&dest.file_stem().is_some(), "filename can't be missing");
-        Some(QueueTask::Move { src, dest })
+        QueueTask::Move { src, dest }
     }
 }
 

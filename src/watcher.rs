@@ -90,9 +90,7 @@ impl<'event> Watch {
             thread::Builder::new()
                 .spawn_scoped(s, move || {
                     queue_rx.iter().for_each(|Schedule { job, path }| {
-                        if let Some(f) = job.parse(path.clone()) {
-                            self.handle_move_task(f);
-                        }
+                        self.handle_move_task(job.parse(path.clone()));
                     });
                 })
                 .unwrap();
