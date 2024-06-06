@@ -112,10 +112,7 @@ impl Job {
         self
     }
 
-    fn set_event(
-        mut self,
-        callback: impl (Fn(EventKind) -> bool) + Send + 'static,
-    ) -> Self {
+    fn set_event(mut self, callback: impl (Fn(EventKind) -> bool) + Send + 'static) -> Self {
         self.events
             .replace(Box::new(Arc::new(Mutex::new(callback))));
         self

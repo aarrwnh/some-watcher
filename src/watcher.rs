@@ -1,16 +1,11 @@
 #![allow(clippy::unused_io_amount)]
 #![allow(unused_must_use)]
 
+use crossbeam_channel::{bounded, Sender};
 use notify::*;
 use notify_debouncer_full::*;
 
-use std::{
-    fs,
-    path::PathBuf,
-    sync::mpsc::{self, Sender},
-    thread,
-    time::Duration,
-};
+use std::{fs, path::PathBuf, thread, time::Duration};
 
 use crate::*;
 
@@ -72,7 +67,7 @@ impl<'event> Watch {
     }
 
     pub fn start(&self, rules: &[Rule]) -> notify::Result<()> {
-        let (queue_tx, queue_rx) = mpsc::channel::<Schedule>();
+        let (queue_tx, queue_rx) = bounded::<Schedule>(1);
         thread::scope(|s| {
             // create watchers for each directory
             rules.iter().for_each(|rule| {
@@ -153,7 +148,7 @@ impl<'event> Watch {
             RecursiveMode::NonRecursive
         };
 
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = bounded(1);
         let mut debouncer = new_debouncer(
             self.config.timeout.expect("self.timeout"),
             self.config.tick_rate,
