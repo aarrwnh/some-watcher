@@ -74,10 +74,15 @@ impl<'event> Watch {
                 thread::Builder::new()
                     .name(rule.src_path.to_str().unwrap().to_string())
                     .spawn_scoped(s, || {
-                        log::info!("Watching {}", rule.src_path.print());
                         if let Err(error) = self.watch_one(&queue_tx, rule) {
-                            log::error!("Error: {error:?}");
-                        }
+                            use notify::ErrorKind as E;
+                            match error.kind {
+                                E::PathNotFound => {
+                                    log::error!("Notfound {}", rule.src_path.print())
+                                }
+                                _ => log::error!("Error: {error:?}"),
+                            };
+                        };
                     })
                     .unwrap();
             });
@@ -147,6 +152,12 @@ impl<'event> Watch {
         } else {
             RecursiveMode::NonRecursive
         };
+
+        if !src_path.exists() {
+            return Err(notify::Error::path_not_found());
+        }
+
+        log::info!("Watching {}", src_path.print());
 
         let (tx, rx) = bounded(1);
         let mut debouncer = new_debouncer(
