@@ -44,9 +44,8 @@ pub struct Config {
     pub dump_folder: PathBuf,
     // TODO: naybe
     // ignore_path_length: bool,
-
-    // debouncer:
-    pub timeout: Option<Duration>,
+    /// See [notify::Config]
+    pub poll_interval: Option<Duration>,
     pub tick_rate: Option<Duration>,
 }
 
@@ -60,14 +59,13 @@ impl<'event> Watch {
         if dump_folder.try_exists().is_err() {
             std::fs::create_dir_all(dump_folder).expect("should create new dump folder");
         }
-        if config.timeout.is_none() {
-            config.timeout.replace(Duration::from_secs(2));
-        }
+        config.poll_interval.get_or_insert(Duration::from_secs(2));
         Self { config }
     }
 
     pub fn start(&self, rules: &[Rule]) -> notify::Result<()> {
         let (queue_tx, queue_rx) = bounded::<Schedule>(1);
+
         thread::scope(|s| {
             // create watchers for each directory
             rules.iter().for_each(|rule| {
@@ -161,7 +159,9 @@ impl<'event> Watch {
 
         let (tx, rx) = bounded(1);
         let mut debouncer = new_debouncer(
-            self.config.timeout.expect("self.timeout"),
+            rule.poll_interval
+                .or(self.config.poll_interval)
+                .expect("poll_interval"),
             self.config.tick_rate,
             tx,
         )?;
@@ -192,7 +192,7 @@ impl<'event> Watch {
                             scheduler
                                 .send(Schedule {
                                     job,
-                                    path: path.clone(),
+                                    path: path.to_path_buf(),
                                 })
                                 .unwrap();
                         }

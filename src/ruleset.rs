@@ -45,7 +45,7 @@ pub(crate) enum WatchingKind {
 
 #[derive(Clone, Default)]
 pub struct Job {
-    /// Label to display with print
+    /// TODO: Label to display with print?
     label: Option<&'static str>,
     /// TODO: maybe later for crossterm
     description: Option<&'static str>,
@@ -167,7 +167,7 @@ impl JobParser for Job {
         if let Some(re) = &self.match_pattern {
             let hay = src.to_str().unwrap();
             match re.captures(hay) {
-                Some(_) => {},
+                Some(_) => {}
                 None => return QueueTask::None,
             };
         }
@@ -211,8 +211,9 @@ impl JobParser for Job {
 
 #[derive(Clone)]
 pub struct Rule {
-    pub src_path: PathBuf,
-    pub jobs: Vec<Job>,
+    pub(crate) src_path: PathBuf,
+    pub(crate) jobs: Vec<Job>,
+    pub(crate) poll_interval: Option<std::time::Duration>,
 }
 
 impl Rule {
@@ -220,7 +221,14 @@ impl Rule {
         Self {
             src_path,
             jobs: Vec::new(),
+            poll_interval: None,
         }
+    }
+
+    /// Modify polling interval of each rule (watching dir) instead of using global.
+    pub fn with_poll_interval(mut self, d: std::time::Duration) -> Self {
+        self.poll_interval.replace(d);
+        self
     }
 
     #[allow(clippy::should_implement_trait)]
@@ -233,7 +241,7 @@ impl Rule {
         }
 
         // assert destination path
-        match job.dest.clone() {
+        match &job.dest {
             Some(dest) => {
                 if cfg!(target_os = "windows") {
                     let mut src_path = self.src_path.clone();
