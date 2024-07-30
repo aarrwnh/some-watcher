@@ -190,11 +190,6 @@ impl JobParser for Job {
             }
         }
 
-        // TODO: handle folders (atm, can be handled in each module)
-        if self.watched_types == WatchingKind::Dirs {
-            return QueueTask::Path(src);
-        }
-
         if src.cmp(&dest) == std::cmp::Ordering::Equal {
             // if paths are the same, as that will obviously should do nothing
             return QueueTask::None;
@@ -226,13 +221,13 @@ impl Rule {
     }
 
     /// Modify polling interval of each rule (watching dir) instead of using global.
-    pub fn with_poll_interval(mut self, d: std::time::Duration) -> Self {
+    pub fn with_poll_interval(&mut self, d: std::time::Duration) -> &mut Self {
         self.poll_interval.replace(d);
         self
     }
 
     #[allow(clippy::should_implement_trait)]
-    pub fn add(mut self, mut job: Job) -> Self {
+    pub fn add(&mut self, mut job: Job) -> &mut Self {
         if job.events.is_none() {
             panic!(
                 "required watch event for {} action missing ",
@@ -273,11 +268,6 @@ impl Rule {
         self.jobs.push(job);
         self
     }
-}
-
-/// Wrapper for [`Rule::new`]
-pub fn watch_location(s: &'static str) -> Rule {
-    Rule::new(s.into())
 }
 
 // #[derive(Clone)]

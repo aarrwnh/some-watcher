@@ -51,6 +51,7 @@ pub struct Config {
 
 pub struct Watch {
     config: Config,
+    rules: Vec<Rule>,
 }
 
 impl<'event> Watch {
@@ -60,15 +61,23 @@ impl<'event> Watch {
             std::fs::create_dir_all(dump_folder).expect("should create new dump folder");
         }
         config.poll_interval.get_or_insert(Duration::from_secs(2));
-        Self { config }
+        Self {
+            config,
+            rules: Vec::new(),
+        }
     }
 
-    pub fn start(&self, rules: &[Rule]) -> notify::Result<()> {
+    pub fn watch(&mut self, path: &str) -> &mut Rule {
+        self.rules.push(Rule::new(path.into()));
+        self.rules.last_mut().unwrap()
+    }
+
+    pub fn start(&self) -> notify::Result<()> {
         let (queue_tx, queue_rx) = bounded::<Schedule>(1);
 
         thread::scope(|s| {
             // create watchers for each directory
-            rules.iter().for_each(|rule| {
+            self.rules.iter().for_each(|rule| {
                 thread::Builder::new()
                     .name(rule.src_path.to_str().unwrap().to_string())
                     .spawn_scoped(s, || {
