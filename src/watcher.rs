@@ -21,7 +21,7 @@ pub(crate) enum QueueTask {
 }
 
 struct Schedule<'event> {
-    job: &'event Job,
+    job: &'event Task,
     path: PathBuf,
 }
 
@@ -181,7 +181,7 @@ impl<'event> Watch {
                 Ok(events) => {
                     events.iter().for_each(|event| {
                         // dbg!(event);
-                        for job in &rule.jobs {
+                        for job in &rule.task {
                             let event_check = match job.events.as_ref() {
                                 None => continue,
                                 Some(me) => me.lock().unwrap(),

@@ -44,11 +44,9 @@ pub(crate) enum WatchingKind {
 }
 
 #[derive(Clone, Default)]
-pub struct Job {
+pub struct Task {
     /// TODO: Label to display with print?
     label: Option<&'static str>,
-    /// TODO: maybe later for crossterm
-    description: Option<&'static str>,
     /// A [`WatchingKind`] to filter watch events
     pub(crate) watched_types: WatchingKind,
     /// [`EventKind`]
@@ -61,9 +59,7 @@ pub struct Job {
     inner: Option<Box<Arc<Mutex<dyn Module + Send + 'static>>>>,
 }
 
-const NO_DESCRIPTION: &str = "no description";
-
-impl Job {
+impl Task {
     pub fn builder() -> Self {
         Self::default()
     }
@@ -89,12 +85,6 @@ impl Job {
     /// For log printing?
     pub fn set_label(mut self, s: &'static str) -> Self {
         self.label.replace(s);
-        self
-    }
-
-    /// TODO
-    pub fn set_description(mut self, s: &'static str) -> Self {
-        self.description.replace(s);
         self
     }
 
@@ -142,22 +132,11 @@ impl Job {
     }
 }
 
-pub(crate) trait JobParser {
+pub(crate) trait TaskParser {
     fn parse(&self, src: PathBuf) -> QueueTask;
-
-    #[allow(dead_code)]
-    fn short(&self) -> &str;
 }
 
-impl JobParser for Job {
-    #[allow(dead_code)]
-    fn short(&self) -> &str {
-        match &self.description {
-            Some(s) => &s[0..(if s.len() >= 10 { 10 } else { s.len() })],
-            None => NO_DESCRIPTION,
-        }
-    }
-
+impl TaskParser for Task {
     fn parse(&self, src: PathBuf) -> QueueTask {
         if src.extension().is_some_and(|e| e == "part") {
             return QueueTask::None;
@@ -207,7 +186,7 @@ impl JobParser for Job {
 #[derive(Clone)]
 pub struct Rule {
     pub(crate) src_path: PathBuf,
-    pub(crate) jobs: Vec<Job>,
+    pub(crate) task: Vec<Task>,
     pub(crate) poll_interval: Option<std::time::Duration>,
 }
 
@@ -215,7 +194,7 @@ impl Rule {
     pub const fn new(src_path: PathBuf) -> Self {
         Self {
             src_path,
-            jobs: Vec::new(),
+            task: Vec::new(),
             poll_interval: None,
         }
     }
@@ -227,16 +206,16 @@ impl Rule {
     }
 
     #[allow(clippy::should_implement_trait)]
-    pub fn add(&mut self, mut job: Job) -> &mut Self {
-        if job.events.is_none() {
+    pub fn add(&mut self, mut task: Task) -> &mut Self {
+        if task.events.is_none() {
             panic!(
-                "required watch event for {} action missing ",
-                job.label.unwrap()
+                "required watch event for {} task missing ",
+                task.label.unwrap()
             );
         }
 
         // assert destination path
-        match &job.dest {
+        match &task.dest {
             Some(dest) => {
                 if cfg!(target_os = "windows") {
                     let mut src_path = self.src_path.clone();
@@ -254,18 +233,18 @@ impl Rule {
                         if n != p {
                             let mut new_dest = PathBuf::from(&src_path);
                             new_dest.push(n);
-                            job.dest.replace(new_dest);
+                            task.dest.replace(new_dest);
                         }
                     };
                 }
             }
             // use root watching path if empty
             None => {
-                job.dest.replace(self.src_path.to_path_buf());
+                task.dest.replace(self.src_path.to_path_buf());
             }
         };
 
-        self.jobs.push(job);
+        self.task.push(task);
         self
     }
 }
