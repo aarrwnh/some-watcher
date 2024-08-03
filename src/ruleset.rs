@@ -28,9 +28,8 @@ pub enum Resolved {
     Info(String),
     Ok(String),
     Err(String),
-    /// continue with default move file
+    /// Continue with default file move.
     Continue,
-    /// do nothing
     #[default]
     None,
 }
@@ -102,9 +101,11 @@ impl Task {
         self
     }
 
-    fn set_event(mut self, callback: impl (Fn(EventKind) -> bool) + Send + 'static) -> Self {
-        self.events
-            .replace(Box::new(Arc::new(Mutex::new(callback))));
+    fn set_event<F>(mut self, f: F) -> Self
+    where
+        F: (Fn(EventKind) -> bool) + Send + 'static,
+    {
+        self.events.replace(Box::new(Arc::new(Mutex::new(f))));
         self
     }
 
@@ -126,18 +127,17 @@ impl Task {
         })
     }
 
-    pub fn with_callback(mut self, callback: impl Module + Send + 'static) -> Self {
+    pub fn with_callback<C>(mut self, callback: C) -> Self
+    where
+        C: Module + Send + 'static,
+    {
         self.inner.replace(Box::new(Arc::new(Mutex::new(callback))));
         self
     }
 }
 
-pub(crate) trait TaskParser {
-    fn parse(&self, src: PathBuf) -> QueueTask;
-}
-
-impl TaskParser for Task {
-    fn parse(&self, src: PathBuf) -> QueueTask {
+impl Task {
+    pub(crate) fn parse(&self, src: PathBuf) -> QueueTask {
         if src.extension().is_some_and(|e| e == "part") {
             return QueueTask::None;
         }
@@ -205,7 +205,6 @@ impl Rule {
         self
     }
 
-    #[allow(clippy::should_implement_trait)]
     pub fn add(&mut self, mut task: Task) -> &mut Self {
         if task.events.is_none() {
             panic!(
