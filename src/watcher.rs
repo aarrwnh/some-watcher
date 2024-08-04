@@ -67,9 +67,9 @@ impl<'event> Watch {
         }
     }
 
-    pub fn watch(&mut self, path: &str) -> &mut Rule {
+    pub fn watch(&mut self, path: &str, f: impl FnOnce(&mut Rule)) {
         self.rules.push(Rule::new(path.into()));
-        self.rules.last_mut().unwrap()
+        f(self.rules.last_mut().unwrap());
     }
 
     pub fn start(&self) -> notify::Result<()> {
