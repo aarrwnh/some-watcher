@@ -6,6 +6,8 @@ pub use watcher::{Config, Watch};
 
 pub use notify::Result;
 
+static IGNORED_COLOR: &str = "38;5;238";
+
 #[macro_export]
 macro_rules! color {
     ($c:expr, $w:expr) => {
@@ -15,12 +17,12 @@ macro_rules! color {
 
 pub trait PrintablePath {
     /// Prepares path for display
-    fn print(&self) -> String;
+    fn prepare_path(&self) -> String;
 }
 
 impl PrintablePath for std::path::PathBuf {
-    fn print(&self) -> String {
-        let sep = color!("38;5;238", '/');
+    fn prepare_path(&self) -> String {
+        let sep = color!(IGNORED_COLOR, '/');
         let s = self.to_string_lossy();
         let parts = s.split('\\').collect::<Vec<_>>();
         parts

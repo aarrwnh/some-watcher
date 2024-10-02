@@ -18,6 +18,7 @@ pub trait Module {
     fn resolve(&self, src: PathBuf, dest: PathBuf) -> Resolved;
 }
 
+/// Control flow.
 #[derive(Debug, Default)]
 #[non_exhaustive]
 pub enum Resolved {
@@ -138,7 +139,7 @@ impl Task {
 
 impl Task {
     pub(crate) fn parse(&self, src: PathBuf) -> QueueTask {
-        if src.extension().is_some_and(|e| e == "part") {
+        if cfg!(target_os = "windows") && src.extension().is_some_and(|e| e == "part") {
             return QueueTask::None;
         }
 
