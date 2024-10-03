@@ -16,7 +16,6 @@ static ICON_SUCCESS: &str = "";
 static ICON_WARNING: &str = "";
 
 /// Internal
-#[derive(Debug)]
 pub(crate) enum QueueTask {
     Move { src: PathBuf, dest: PathBuf },
     Path(PathBuf),
@@ -26,11 +25,7 @@ pub(crate) enum QueueTask {
     None,
 }
 
-struct Schedule<'event> {
-    job: &'event Task,
-    path: PathBuf,
-    event_name: &'event str,
-}
+struct Schedule<'e>(QueueTask, &'e str);
 
 impl QueueTask {
     fn print_done(self, event_name: &str) {
@@ -57,12 +52,12 @@ pub struct Config {
     pub tick_rate: Option<Duration>,
 }
 
-pub struct Watch {
+pub struct Watch<'a> {
     config: Config,
-    rules: Vec<Rule>,
+    rules: Vec<Ruleset<'a>>,
 }
 
-impl<'event> Watch {
+impl<'a> Watch<'a> {
     pub fn new(mut config: Config) -> Self {
         let dump_folder = &config.dump_folder;
         if dump_folder.try_exists().is_err() {
@@ -75,44 +70,39 @@ impl<'event> Watch {
         }
     }
 
-    pub fn watch(&mut self, path: &str, f: impl FnOnce(&mut Rule)) {
-        self.rules.push(Rule::new(path.into()));
+    pub fn watch(&mut self, path: &str, f: impl FnOnce(&mut Ruleset<'a>)) -> &mut Self {
+        self.rules.push(Ruleset::new(path.into()).unwrap());
         f(self.rules.last_mut().unwrap());
+        self
     }
 
-    pub fn start(&self) -> notify::Result<()> {
-        let (queue_tx, queue_rx) = bounded::<Schedule>(1);
-
+    pub fn start(&mut self) -> notify::Result<()> {
+        let (queue_tx, queue_rx) = bounded(1);
         thread::scope(|s| {
             // create watchers for each directory
-            self.rules.iter().for_each(|rule| {
+            for rule in &self.rules {
                 thread::Builder::new()
-                    .name(rule.src_path.to_str().unwrap().to_string())
+                    .name(format!("watcher#{}", rule.watched_path.display()))
                     .spawn_scoped(s, || {
                         if let Err(error) = self.watch_one(&queue_tx, rule) {
                             use notify::ErrorKind as E;
                             match error.kind {
                                 E::PathNotFound => {
-                                    log::error!("Notfound {}", rule.src_path.prepare_path())
+                                    log::error!("Notfound {}", rule.watched_path.prepare_path())
                                 }
                                 _ => log::error!("Error: {error:?}"),
                             };
                         };
                     })
                     .unwrap();
-            });
+            }
 
             thread::Builder::new()
-                .spawn_scoped(s, move || {
-                    queue_rx.iter().for_each(
-                        |Schedule {
-                             job,
-                             path,
-                             event_name,
-                         }| {
-                            self.handle_move_task(job.parse(path.clone()), event_name);
-                        },
-                    );
+                .name("queue_rx".into())
+                .spawn_scoped(s, || {
+                    for Schedule(queue_task, event_name) in queue_rx {
+                        self.handle_move_task(queue_task, event_name);
+                    }
                 })
                 .unwrap();
         });
@@ -164,22 +154,16 @@ impl<'event> Watch {
 
     fn watch_one(
         &self,
-        scheduler: &Sender<Schedule<'event>>,
-        rule: &'event Rule,
+        scheduler: &'_ Sender<Schedule<'_>>,
+        rule: &'_ Ruleset<'_>,
     ) -> notify::Result<()> {
-        let mut src_path = rule.src_path.to_path_buf();
-        let recursive_mode = if src_path.ends_with("*") {
-            src_path.pop(); // remove *
-            RecursiveMode::Recursive
-        } else {
-            RecursiveMode::NonRecursive
-        };
+        let Ruleset {
+            watched_path,
+            recursive_mode,
+            ..
+        } = rule;
 
-        if !src_path.exists() {
-            return Err(notify::Error::path_not_found());
-        }
-
-        log::info!("Watching {}", src_path.prepare_path());
+        log::info!("Watching {}", watched_path.prepare_path());
 
         let (tx, rx) = bounded(1);
         let mut debouncer = new_debouncer(
@@ -189,36 +173,34 @@ impl<'event> Watch {
             self.config.tick_rate,
             tx,
         )?;
-        debouncer.watcher().watch(&src_path, recursive_mode)?;
+        debouncer.watcher().watch(watched_path, *recursive_mode)?;
 
         for result in rx {
             match result {
                 Ok(events) => {
                     events.iter().for_each(|event| {
                         let path = event.paths.last().unwrap();
-                        for job in &rule.task {
-                            match job.events.as_ref() {
-                                None => continue,
-                                Some(f) => {
-                                    if !(f.lock().unwrap())(event.kind) {
-                                        continue;
-                                    }
-                                }
-                            };
+                        for inner in &rule.tasks {
+                            let task = inner.0.lock().unwrap();
 
-                            match job.watched_types {
+                            match task.watched_types {
                                 WatchingKind::Dirs if !path.is_dir() => continue,
                                 WatchingKind::Files if !path.is_file() => continue,
                                 _ => {}
                             }
 
-                            scheduler
-                                .send(Schedule {
-                                    job,
-                                    path: path.to_owned(),
-                                    event_name: kind_to_str(event.kind),
-                                })
-                                .unwrap();
+                            match task.event_check {
+                                None => continue,
+                                Some(f) => {
+                                    if !f(event.kind) {
+                                        continue;
+                                    }
+                                }
+                            };
+
+                            let queue_task = task.parse(path.to_owned());
+                            let event_name = kind_to_str(event.kind);
+                            scheduler.send(Schedule(queue_task, event_name));
                         }
                     });
                 }

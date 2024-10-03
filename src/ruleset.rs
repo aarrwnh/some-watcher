@@ -1,4 +1,4 @@
-#![allow(clippy::type_complexity)]
+#![allow(clippy::type_complexity, clippy::should_implement_trait)]
 
 use notify::{
     event::{ModifyKind, RenameMode},
@@ -14,8 +14,8 @@ use std::{
 
 use crate::watcher::QueueTask;
 
-pub trait Module {
-    fn resolve(&self, src: PathBuf, dest: PathBuf) -> Resolved;
+pub trait Module: Sync + Send + 'static {
+    fn resolve(&mut self, src: PathBuf, dest: PathBuf) -> Resolved;
 }
 
 /// Control flow.
@@ -35,7 +35,7 @@ pub enum Resolved {
     None,
 }
 
-#[derive(Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) enum WatchingKind {
     Files,
     Dirs,
@@ -43,24 +43,30 @@ pub(crate) enum WatchingKind {
     All,
 }
 
-#[derive(Clone, Default)]
-pub struct Task {
-    /// TODO: Label to display with print?
-    label: Option<&'static str>,
+// ----------------------------------------------------------------------------------
+//   - Task -
+// ----------------------------------------------------------------------------------
+type EventCheck = dyn Fn(EventKind) -> bool + Send + Sync;
+
+#[derive(Default)]
+pub struct Task<'a> {
+    label: Option<&'a str>,
     /// A [`WatchingKind`] to filter watch events
     pub(crate) watched_types: WatchingKind,
     /// [`EventKind`]
-    pub(crate) events: Option<Box<Arc<Mutex<dyn (Fn(EventKind) -> bool) + Send + 'static>>>>,
+    pub(crate) event_check: Option<&'a EventCheck>,
     /// Destination path
-    dest: Option<PathBuf>,
+    pub(crate) destination: Option<PathBuf>,
     /// Regexp pattern
     match_pattern: Option<Regex>,
 
-    inner: Option<Box<Arc<Mutex<dyn Module + Send + 'static>>>>,
+    inner: Option<Arc<Mutex<dyn Module>>>,
 }
 
-impl Task {
-    pub fn builder() -> Self {
+pub(crate) struct InnerTask<'a>(pub(crate) Arc<Mutex<Task<'a>>>);
+
+impl<'a> Task<'a> {
+    pub fn new() -> Self {
         Self::default()
     }
 
@@ -72,18 +78,18 @@ impl Task {
 
     /// Set destination path. Path can be relative.
     ///
-    /// Not calling this method will use the root path [`Rule.src_path`].
+    /// Not calling this method will use the watched path.
     pub fn set_destination(mut self, p: &str) -> Self {
         let path = PathBuf::from(p);
-        if path.is_dir() {
+        if !path.starts_with(".") && path.is_dir() {
             std::fs::create_dir_all(&path).expect("created destination path");
         }
-        self.dest.replace(path);
+        self.destination.replace(path);
         self
     }
 
     /// For log printing?
-    pub fn set_label(mut self, s: &'static str) -> Self {
+    pub fn set_label(mut self, s: &'a str) -> Self {
         self.label.replace(s);
         self
     }
@@ -102,24 +108,21 @@ impl Task {
         self
     }
 
-    fn set_event<F>(mut self, f: F) -> Self
-    where
-        F: (Fn(EventKind) -> bool) + Send + 'static,
-    {
-        self.events.replace(Box::new(Arc::new(Mutex::new(f))));
+    fn set_event(mut self, f: &'a EventCheck) -> Self {
+        self.event_check.replace(f);
         self
     }
 
     pub fn on_modified(self) -> Self {
-        self.set_event(|kind| matches!(kind, EventKind::Modify(_)))
+        self.set_event(&|kind| matches!(kind, EventKind::Modify(_)))
     }
 
     pub fn on_create(self) -> Self {
-        self.set_event(|kind| matches!(kind, EventKind::Create(_)))
+        self.set_event(&|kind| matches!(kind, EventKind::Create(_)))
     }
 
     pub fn on_rename(self) -> Self {
-        self.set_event(|kind| {
+        self.set_event(&|kind| {
             matches!(
                 kind,
                 EventKind::Modify(ModifyKind::Name(RenameMode::To))
@@ -128,35 +131,33 @@ impl Task {
         })
     }
 
-    pub fn with_callback<C>(mut self, callback: C) -> Self
-    where
-        C: Module + Send + 'static,
-    {
-        self.inner.replace(Box::new(Arc::new(Mutex::new(callback))));
+    pub fn with_module<T: Module>(mut self, module: T) -> Self {
+        self.inner.replace(Arc::new(Mutex::new(module)));
         self
     }
-}
 
-impl Task {
+    pub fn finish(self) -> Arc<Mutex<Self>> {
+        Arc::new(Mutex::new(self))
+    }
+
     pub(crate) fn parse(&self, src: PathBuf) -> QueueTask {
-        if cfg!(target_os = "windows") && src.extension().is_some_and(|e| e == "part") {
+        if !src.exists()
+            || cfg!(target_os = "windows") && src.extension().is_some_and(|e| e == "part")
+        {
             return QueueTask::None;
         }
 
         // filter events only if regex pattern match was provided
         if let Some(re) = &self.match_pattern {
-            let hay = src.to_str().unwrap();
-            match re.captures(hay) {
-                Some(_) => {}
-                None => return QueueTask::None,
-            };
+            if re.captures(src.to_str().unwrap()).is_none() {
+                return QueueTask::None;
+            }
         }
 
-        let mut dest = self.dest.as_ref().unwrap().clone();
+        let mut dest = self.destination.clone().unwrap();
         dest.push(src.file_name().unwrap());
 
         if let Some(x) = &self.inner {
-            // format destination path in the inner
             match x.lock().unwrap().resolve(src.clone(), dest.clone()) {
                 Resolved::Move { dest: mut new_path } => {
                     std::mem::swap(&mut dest, &mut new_path);
@@ -181,23 +182,36 @@ impl Task {
 }
 
 // ----------------------------------------------------------------------------------
-//   - Rule -
+//   - Ruleset -
 // ----------------------------------------------------------------------------------
-
-#[derive(Clone)]
-pub struct Rule {
-    pub(crate) src_path: PathBuf,
-    pub(crate) task: Vec<Task>,
+pub struct Ruleset<'a> {
+    pub(crate) watched_path: PathBuf,
+    pub(crate) tasks: Vec<InnerTask<'a>>,
     pub(crate) poll_interval: Option<std::time::Duration>,
+    pub(crate) recursive_mode: RecursiveMode,
 }
 
-impl Rule {
-    pub const fn new(src_path: PathBuf) -> Self {
-        Self {
-            src_path,
-            task: Vec::new(),
-            poll_interval: None,
+impl<'a> Ruleset<'a> {
+    pub fn new(watched_path: PathBuf) -> notify::Result<Self> {
+        if watched_path.to_owned().ends_with("*") {
+            panic!();
         }
+
+        if !watched_path.exists() {
+            return Err(notify::Error::path_not_found());
+        }
+
+        Ok(Self {
+            watched_path,
+            recursive_mode: RecursiveMode::NonRecursive,
+            tasks: Vec::new(),
+            poll_interval: None,
+        })
+    }
+
+    pub fn recursive_mode(&mut self) -> &mut Self {
+        self.recursive_mode = RecursiveMode::NonRecursive;
+        self
     }
 
     /// Modify polling interval of each rule (watching dir) instead of using global.
@@ -206,45 +220,54 @@ impl Rule {
         self
     }
 
-    pub fn add(&mut self, mut task: Task) -> &mut Self {
-        if task.events.is_none() {
-            panic!(
-                "required watch event for {} task missing ",
-                task.label.unwrap()
-            );
-        }
+    pub fn finish(&self) -> Arc<&Self> {
+        Arc::new(self)
+    }
 
-        // assert destination path
-        match &task.dest {
-            Some(dest) => {
-                if cfg!(target_os = "windows") {
-                    let mut src_path = self.src_path.clone();
-                    // TODO: not sure this is the best way
-                    let p = dest.to_str().unwrap().to_string();
+    pub fn add(&mut self, task: &Arc<Mutex<Task<'a>>>) -> &mut Self {
+        // adjust task to parent rule
+        let _ = task.lock().is_ok_and(|mut task| {
+            if task.event_check.is_none() {
+                panic!(
+                    "required watch event for {} task missing ",
+                    task.label.unwrap()
+                );
+            }
 
-                    if let Some(n) = p.strip_prefix(match p.to_owned() {
-                        s if s.starts_with(r"..\") => {
-                            src_path.pop();
-                            r"..\"
-                        }
-                        s if s.starts_with(r".\") => r".\",
-                        _ => "",
-                    }) {
-                        if n != p {
-                            let mut new_dest = PathBuf::from(&src_path);
-                            new_dest.push(n);
-                            task.dest.replace(new_dest);
-                        }
-                    };
+            // Each task should inherit watched path from parent and resolve
+            // final destination.
+            match &task.destination {
+                Some(dst) => {
+                    if cfg!(target_os = "windows") {
+                        let mut src_path = self.watched_path.clone();
+                        // TODO: not sure this is the best way
+                        let p = dst.to_str().unwrap().to_string();
+
+                        if let Some(n) = p.strip_prefix(match p.to_owned() {
+                            s if s.starts_with(r"..\") => {
+                                src_path.pop();
+                                r"..\"
+                            }
+                            s if s.starts_with(r".\") => r".\",
+                            _ => "",
+                        }) {
+                            if n != p {
+                                let mut new_dest = PathBuf::from(&src_path);
+                                new_dest.push(n);
+                                task.destination.replace(new_dest);
+                            }
+                        };
+                    }
                 }
-            }
-            // use root watching path if empty
-            None => {
-                task.dest.replace(self.src_path.to_path_buf());
-            }
-        };
+                // use root watching path if empty
+                None => {
+                    task.destination.replace(self.watched_path.to_path_buf());
+                }
+            };
+            true
+        });
 
-        self.task.push(task);
+        self.tasks.push(InnerTask(Arc::clone(task)));
         self
     }
 }
