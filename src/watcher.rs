@@ -163,8 +163,6 @@ impl<'a> Watch<'a> {
             ..
         } = rule;
 
-        log::info!("Watching {}", watched_path.prepare_path());
-
         let (tx, rx) = bounded(1);
         let mut debouncer = new_debouncer(
             rule.poll_interval
@@ -174,6 +172,13 @@ impl<'a> Watch<'a> {
             tx,
         )?;
         debouncer.watcher().watch(watched_path, *recursive_mode)?;
+
+        let mode = if *recursive_mode == RecursiveMode::Recursive {
+            "*"
+        } else {
+            ""
+        };
+        log::info!("Watching {}{}", watched_path.prepare_path(), mode);
 
         for result in rx {
             match result {
