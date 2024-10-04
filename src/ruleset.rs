@@ -209,8 +209,9 @@ impl<'a> Ruleset<'a> {
         })
     }
 
+    /// Change directory watch mode to recursive.
     pub fn recursive_mode(&mut self) -> &mut Self {
-        self.recursive_mode = RecursiveMode::NonRecursive;
+        self.recursive_mode = RecursiveMode::Recursive;
         self
     }
 
