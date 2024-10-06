@@ -1,5 +1,6 @@
 #![allow(clippy::type_complexity, clippy::should_implement_trait)]
 
+use normalize_path::NormalizePath;
 use notify::{
     event::{ModifyKind, RenameMode},
     *,
@@ -63,7 +64,11 @@ pub struct Task<'a> {
     inner: Option<Arc<Mutex<dyn Module>>>,
 }
 
-pub(crate) struct InnerTask<'a>(pub(crate) Arc<Mutex<Task<'a>>>);
+pub(crate) struct InnerTask<'a> {
+    pub(crate) task: Arc<Mutex<Task<'a>>>,
+    /// Normalized path for moved files
+    pub(crate) dest: PathBuf,
+}
 
 impl<'a> Task<'a> {
     pub fn new() -> Self {
@@ -140,7 +145,7 @@ impl<'a> Task<'a> {
         Arc::new(Mutex::new(self))
     }
 
-    pub(crate) fn parse(&self, src: PathBuf) -> QueueTask {
+    pub(crate) fn parse(&self, src: PathBuf, mut dest: PathBuf) -> QueueTask {
         if !src.exists()
             || cfg!(target_os = "windows") && src.extension().is_some_and(|e| e == "part")
         {
@@ -154,7 +159,6 @@ impl<'a> Task<'a> {
             }
         }
 
-        let mut dest = self.destination.clone().unwrap();
         dest.push(src.file_name().unwrap());
 
         if let Some(x) = &self.inner {
@@ -194,7 +198,9 @@ pub struct Ruleset<'a> {
 impl<'a> Ruleset<'a> {
     pub fn new(watched_path: PathBuf) -> notify::Result<Self> {
         if watched_path.to_owned().ends_with("*") {
-            panic!();
+            panic!(
+                "Asterisk (*) not allowed as suffix in path. Use recursive_mode() method instead."
+            );
         }
 
         if !watched_path.exists() {
@@ -226,8 +232,10 @@ impl<'a> Ruleset<'a> {
     }
 
     pub fn add(&mut self, task: &Arc<Mutex<Task<'a>>>) -> &mut Self {
+        let watched_path = self.watched_path.clone();
+        let mut dest: Option<_> = None;
         // adjust task to parent rule
-        let _ = task.lock().is_ok_and(|mut task| {
+        let _ = task.lock().is_ok_and(|task| {
             if task.event_check.is_none() {
                 panic!(
                     "required watch event for {} task missing ",
@@ -235,40 +243,19 @@ impl<'a> Ruleset<'a> {
                 );
             }
 
-            // Each task should inherit watched path from parent and resolve
-            // final destination.
-            match &task.destination {
-                Some(dst) => {
-                    if cfg!(target_os = "windows") {
-                        let mut src_path = self.watched_path.clone();
-                        // TODO: not sure this is the best way
-                        let p = dst.to_str().unwrap().to_string();
+            dest.replace(match &task.destination {
+                Some(dst) => watched_path.join(dst),
+                // inherit from parent if empty
+                None => watched_path,
+            });
 
-                        if let Some(n) = p.strip_prefix(match p.to_owned() {
-                            s if s.starts_with(r"..\") => {
-                                src_path.pop();
-                                r"..\"
-                            }
-                            s if s.starts_with(r".\") => r".\",
-                            _ => "",
-                        }) {
-                            if n != p {
-                                let mut new_dest = PathBuf::from(&src_path);
-                                new_dest.push(n);
-                                task.destination.replace(new_dest);
-                            }
-                        };
-                    }
-                }
-                // use root watching path if empty
-                None => {
-                    task.destination.replace(self.watched_path.to_path_buf());
-                }
-            };
             true
         });
 
-        self.tasks.push(InnerTask(Arc::clone(task)));
+        self.tasks.push(InnerTask {
+            task: Arc::clone(task),
+            dest: dest.expect("could not resolve path").normalize(),
+        });
         self
     }
 }

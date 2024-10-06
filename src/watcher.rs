@@ -10,10 +10,10 @@ use std::{fs, path::PathBuf, thread, time::Duration};
 
 use crate::*;
 
-static ICON_NOTHING: &str = "";
-static ICON_INFO: &str = "";
-static ICON_SUCCESS: &str = "";
-static ICON_WARNING: &str = "";
+const ICON_NOTHING: &str = "";
+const ICON_INFO: &str = "";
+const ICON_SUCCESS: &str = "";
+const ICON_WARNING: &str = "";
 
 /// Internal
 pub(crate) enum QueueTask {
@@ -186,7 +186,7 @@ impl<'a> Watch<'a> {
                     events.iter().for_each(|event| {
                         let path = event.paths.last().unwrap();
                         for inner in &rule.tasks {
-                            let task = inner.0.lock().unwrap();
+                            let task = inner.task.lock().unwrap();
 
                             match task.watched_types {
                                 WatchingKind::Dirs if !path.is_dir() => continue,
@@ -203,7 +203,7 @@ impl<'a> Watch<'a> {
                                 }
                             };
 
-                            let queue_task = task.parse(path.to_owned());
+                            let queue_task = task.parse(path.to_owned(), inner.dest.to_owned());
                             let event_name = kind_to_str(event.kind);
                             scheduler.send(Schedule(queue_task, event_name));
                         }
@@ -217,6 +217,7 @@ impl<'a> Watch<'a> {
     }
 }
 
+// TODO: this is temp?
 fn kind_to_str<'a>(event_kind: EventKind) -> &'a str {
     match event_kind {
         EventKind::Any => "any",
