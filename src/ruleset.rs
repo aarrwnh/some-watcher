@@ -63,7 +63,11 @@ pub struct Task<'a> {
     inner: Option<Arc<Mutex<dyn Module>>>,
 }
 
-pub(crate) struct InnerTask<'a>(pub(crate) Arc<Mutex<Task<'a>>>);
+pub(crate) struct InnerTask<'a> {
+    pub(crate) task: Arc<Mutex<Task<'a>>>,
+    /// Normalized path for moved files
+    pub(crate) dest: PathBuf,
+}
 
 impl<'a> Task<'a> {
     pub fn new() -> Self {
@@ -140,7 +144,7 @@ impl<'a> Task<'a> {
         Arc::new(Mutex::new(self))
     }
 
-    pub(crate) fn parse(&self, src: PathBuf) -> QueueTask {
+    pub(crate) fn parse(&self, src: PathBuf, mut dest: PathBuf) -> QueueTask {
         if !src.exists()
             || cfg!(target_os = "windows") && src.extension().is_some_and(|e| e == "part")
         {
@@ -154,7 +158,6 @@ impl<'a> Task<'a> {
             }
         }
 
-        let mut dest = self.destination.clone().unwrap();
         dest.push(src.file_name().unwrap());
 
         if let Some(x) = &self.inner {
@@ -226,8 +229,10 @@ impl<'a> Ruleset<'a> {
     }
 
     pub fn add(&mut self, task: &Arc<Mutex<Task<'a>>>) -> &mut Self {
+        let mut dest: Option<_> = None;
+
         // adjust task to parent rule
-        let _ = task.lock().is_ok_and(|mut task| {
+        let _ = task.lock().is_ok_and(|task| {
             if task.event_check.is_none() {
                 panic!(
                     "required watch event for {} task missing ",
@@ -235,42 +240,58 @@ impl<'a> Ruleset<'a> {
                 );
             }
 
-            // Each task should inherit watched path from parent and resolve
-            // final destination.
+            // resolve and normalize final destination
             match &task.destination {
                 Some(dst) => {
                     if cfg!(target_os = "windows") {
-                        let mut src_path = self.watched_path.clone();
-                        // TODO: not sure this is the best way
-                        let p = dst.to_str().unwrap().to_string();
-
-                        if let Some(n) = p.strip_prefix(match p.to_owned() {
-                            s if s.starts_with(r"..\") => {
-                                src_path.pop();
-                                r"..\"
-                            }
-                            s if s.starts_with(r".\") => r".\",
-                            _ => "",
-                        }) {
-                            if n != p {
-                                let mut new_dest = PathBuf::from(&src_path);
-                                new_dest.push(n);
-                                task.destination.replace(new_dest);
-                            }
-                        };
+                        let path = self.watched_path.clone();
+                        dest.replace(strip(path, dst.to_str().unwrap()));
+                    } else {
+                        unimplemented!();
                     }
                 }
-                // use root watching path if empty
+                // inherit from parent if empty
                 None => {
-                    task.destination.replace(self.watched_path.to_path_buf());
+                    dest.replace(self.watched_path.clone());
                 }
             };
             true
         });
 
-        self.tasks.push(InnerTask(Arc::clone(task)));
+        self.tasks.push(InnerTask {
+            task: Arc::clone(task),
+            dest: dest.expect("could not resolve path"),
+        });
         self
     }
+}
+
+const DIR_UP: &str = r"..\";
+const DIR_CUR: &str = r".\";
+
+pub fn strip(mut p: PathBuf, s: &str) -> PathBuf {
+    match s {
+        n if n.starts_with(DIR_UP) => match p.pop() {
+            true => strip(p, n.strip_prefix(DIR_UP).unwrap()),
+            false => strip(p, n.trim_start_matches(DIR_UP)),
+        },
+        n if n.starts_with(DIR_CUR) => strip(p, n.strip_prefix(DIR_CUR).unwrap()),
+        _ => {
+            p.push(s);
+            p
+        }
+    }
+}
+
+#[rustfmt::skip]
+#[test]
+fn normalize_path() {
+    let from = PathBuf::from;
+    assert_eq!(Some(r"c:\a\e\"), strip(from(r"c:\a\b\c\"), r"..\..\e\").to_str());
+    assert_eq!(Some(r"c:\a\"), strip(from(r"c:\a\b\c\"), r"..\..\").to_str());
+    assert_eq!(Some(r"c:\"), strip(from(r"c:\a\"), r"..\..\..\").to_str());
+    assert_eq!(Some(r"c:\a\b\"), strip(from(r"c:\a\"), r".\b\").to_str());
+    assert_eq!(Some(r"c:\b\"), strip(from(r"c:\"), r".\b\").to_str());
 }
 
 // #[derive(Clone)]
