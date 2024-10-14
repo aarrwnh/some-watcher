@@ -1,3 +1,5 @@
+use std::sync::LazyLock;
+
 mod ruleset;
 pub use ruleset::*;
 
@@ -7,6 +9,7 @@ pub use watcher::{Config, Watch};
 pub use notify::Result;
 
 static IGNORED_COLOR: &str = "38;5;238";
+static SEP: LazyLock<String> = LazyLock::new(|| color!(IGNORED_COLOR, std::path::MAIN_SEPARATOR));
 
 #[macro_export]
 macro_rules! color {
@@ -15,30 +18,49 @@ macro_rules! color {
     };
 }
 
-pub trait PrintablePath {
-    /// Prepares path for display
-    fn prepare_path(&self) -> String;
+pub trait ColoredPath {
+    /// Prepares path for display.
+    fn color_path(&self) -> String;
 }
 
-impl PrintablePath for std::path::PathBuf {
-    fn prepare_path(&self) -> String {
-        let sep = color!(IGNORED_COLOR, '/');
-        let s = self.to_string_lossy();
-        let parts = s.split('\\').collect::<Vec<_>>();
-        parts
-            .iter()
-            .enumerate()
-            .map(|(i, p)| {
-                if i == parts.len() - 2 {
-                    color!(36, p)
-                } else if i < parts.len() - 1 {
-                    color!(37, p)
+#[derive(PartialEq)]
+enum ColorHelp {
+    Y, // yes
+    N, // no
+    M, // maybe
+}
+
+impl ColoredPath for std::path::PathBuf {
+    fn color_path(&self) -> String {
+        use std::path::Component::*;
+        use ColorHelp::*;
+
+        let mut res = Vec::from([]);
+        for (i, c) in self.components().rev().enumerate() {
+            if let Some((h, s)) = match c {
+                CurDir => Some((Y, ".")),
+                ParentDir => Some((Y, "..")),
+                RootDir if i == 0 => Some((N, "#")),
+                // idx=0 do not color tail part
+                Normal(c) => Some((if i == 0 { N } else { Y }, c.to_str().unwrap())),
+                // idx=1
+                Prefix(c) => Some((if i == 1 { M } else { Y }, c.as_os_str().to_str().unwrap())),
+                _ => None,
+            } {
+                let code = match i {
+                    _ if h == M => 37,
+                    1 => 36,
+                    _ => 37,
+                };
+                res.push(if h == Y || h == M {
+                    color!(code, s)
                 } else {
-                    p.to_string()
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(&sep)
+                    s.to_string()
+                });
+            };
+        }
+        res.reverse();
+        res.join(&SEP)
     }
 }
 

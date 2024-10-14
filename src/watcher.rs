@@ -30,7 +30,7 @@ struct Schedule<'e>(QueueTask, &'e str);
 impl QueueTask {
     fn print_done(self, event_name: &str) {
         let (code, icon, msg) = match self {
-            Self::Path(src) => (33, ICON_NOTHING, src.prepare_path()),
+            Self::Path(src) => (33, ICON_NOTHING, src.color_path()),
             Self::Info(msg) => (37, ICON_INFO, msg),
             Self::Ok(msg) => (32, ICON_SUCCESS, msg),
             Self::Err(msg) => (31, ICON_WARNING, msg),
@@ -88,9 +88,9 @@ impl<'a> Watch<'a> {
                             use notify::ErrorKind as E;
                             match error.kind {
                                 E::PathNotFound => {
-                                    log::error!("Notfound {}", rule.watched_path.prepare_path())
+                                    eprintln!("Notfound {}", rule.watched_path.color_path())
                                 }
-                                _ => log::error!("Error: {error:?}"),
+                                _ => eprintln!("Error: {error:?}"),
                             };
                         };
                     })
@@ -110,12 +110,13 @@ impl<'a> Watch<'a> {
     }
 
     fn handle_move_task(&self, task: QueueTask, event_name: &str) {
-        // log::info!("{:?}", task);
         match task {
+            QueueTask::None => return,
+
             q @ QueueTask::Err(_)
             | q @ QueueTask::Ok(_)
             | q @ QueueTask::Info(_)
-            | q @ QueueTask::Path(_) => q.print_done(event_name),
+            | q @ QueueTask::Path(_) => q,
 
             QueueTask::Move { src, mut dest } => {
                 // TODO: what to do with this?
@@ -141,15 +142,14 @@ impl<'a> Watch<'a> {
                 }
 
                 match fs::rename(&src, &dest) {
-                    Ok(_) => QueueTask::Ok(dest.prepare_path()),
+                    Ok(_) => QueueTask::Ok(dest.color_path()),
                     Err(err) => {
-                        QueueTask::Err(format!("{}  {}", src.prepare_path(), color!(31, err)))
+                        QueueTask::Err(format!("{}  {}", src.color_path(), color!(31, err)))
                     }
                 }
-                .print_done(event_name)
             }
-            QueueTask::None => {}
         }
+        .print_done(event_name);
     }
 
     fn watch_one(
@@ -158,7 +158,7 @@ impl<'a> Watch<'a> {
         rule: &'_ Ruleset<'_>,
     ) -> notify::Result<()> {
         let Ruleset {
-            watched_path,
+            watched_path: path,
             recursive_mode,
             ..
         } = rule;
@@ -171,14 +171,14 @@ impl<'a> Watch<'a> {
             self.config.tick_rate,
             tx,
         )?;
-        debouncer.watcher().watch(watched_path, *recursive_mode)?;
+        debouncer.watcher().watch(path, *recursive_mode)?;
 
         let mode = if *recursive_mode == RecursiveMode::Recursive {
             "*"
         } else {
             ""
         };
-        log::info!("Watching {}{}", watched_path.prepare_path(), mode);
+        println!("\x1b[37m# watching {}\x1b[0m", path.join(mode).display());
 
         for result in rx {
             match result {
@@ -209,7 +209,7 @@ impl<'a> Watch<'a> {
                         }
                     });
                 }
-                Err(errors) => errors.iter().for_each(|error| log::error!("{error:?}")),
+                Err(errors) => errors.iter().for_each(|error| eprintln!("{error:?}")),
             }
         }
 

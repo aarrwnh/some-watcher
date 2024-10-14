@@ -1,5 +1,3 @@
-#![allow(clippy::type_complexity, clippy::should_implement_trait)]
-
 use normalize_path::NormalizePath;
 use notify::{
     event::{ModifyKind, RenameMode},
@@ -56,9 +54,9 @@ pub struct Task<'a> {
     pub(crate) watched_types: WatchingKind,
     /// [`EventKind`]
     pub(crate) event_check: Option<&'a EventCheck>,
-    /// Destination path
+    /// Destination path. By default watched path from [`Ruleset`] is used.
     pub(crate) destination: Option<PathBuf>,
-    /// Regexp pattern
+    /// Filter path events only if regex pattern match was provided.
     match_pattern: Option<Regex>,
 
     inner: Option<Arc<Mutex<dyn Module>>>,
@@ -82,8 +80,6 @@ impl<'a> Task<'a> {
     }
 
     /// Set destination path. Path can be relative.
-    ///
-    /// Not calling this method will use the watched path.
     pub fn set_destination(mut self, p: &str) -> Self {
         let path = PathBuf::from(p);
         if !path.starts_with(".") && path.is_dir() {
@@ -152,7 +148,6 @@ impl<'a> Task<'a> {
             return QueueTask::None;
         }
 
-        // filter events only if regex pattern match was provided
         if let Some(re) = &self.match_pattern {
             if re.captures(src.to_str().unwrap()).is_none() {
                 return QueueTask::None;
