@@ -7,6 +7,7 @@ mod watcher;
 pub use watcher::{Config, Watch};
 
 pub use notify::Result;
+pub use notify::EventKind;
 
 static IGNORED_COLOR: &str = "38;5;238";
 static SEP: LazyLock<String> = LazyLock::new(|| color!(IGNORED_COLOR, std::path::MAIN_SEPARATOR));

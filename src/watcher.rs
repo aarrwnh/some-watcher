@@ -4,7 +4,7 @@
 use crossbeam_channel::{bounded, Sender};
 use notify::event::{ModifyKind, RemoveKind, RenameMode};
 use notify::*;
-use notify_debouncer_full::*;
+use notify_debouncer_full::new_debouncer;
 
 use std::{fs, path::PathBuf, thread, time::Duration};
 
@@ -171,7 +171,7 @@ impl<'a> Watch<'a> {
             self.config.tick_rate,
             tx,
         )?;
-        debouncer.watcher().watch(path, *recursive_mode)?;
+        debouncer.watch(path, *recursive_mode)?;
 
         let mode = if *recursive_mode == RecursiveMode::Recursive {
             "*"

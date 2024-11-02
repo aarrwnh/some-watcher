@@ -1,9 +1,9 @@
-use normalize_path::NormalizePath;
 use notify::{
     event::{ModifyKind, RenameMode},
-    *,
+    EventKind,
+    RecursiveMode,
 };
-use notify_debouncer_full::*;
+use normalize_path::NormalizePath;
 use regex::Regex;
 
 use std::{
