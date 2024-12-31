@@ -45,7 +45,7 @@ pub(crate) enum WatchingKind {
 // ----------------------------------------------------------------------------------
 //   - Task -
 // ----------------------------------------------------------------------------------
-type EventCheck = dyn Fn(EventKind) -> bool + Send + Sync;
+type EventCheck = dyn Fn(EventKind, Option<EventKind>) -> bool + Send + Sync;
 
 #[derive(Default)]
 pub struct Task<'a> {
@@ -109,21 +109,21 @@ impl<'a> Task<'a> {
         self
     }
 
-    fn set_event(mut self, f: &'a EventCheck) -> Self {
+    pub fn event_watch(mut self, f: &'a EventCheck) -> Self {
         self.event_check.replace(f);
         self
     }
 
     pub fn on_modified(self) -> Self {
-        self.set_event(&|kind| matches!(kind, EventKind::Modify(_)))
+        self.event_watch(&|kind, _| matches!(kind, EventKind::Modify(_)))
     }
 
     pub fn on_create(self) -> Self {
-        self.set_event(&|kind| matches!(kind, EventKind::Create(_)))
+        self.event_watch(&|kind, _| matches!(kind, EventKind::Create(_)))
     }
 
     pub fn on_rename(self) -> Self {
-        self.set_event(&|kind| {
+        self.event_watch(&|kind, _| {
             matches!(
                 kind,
                 EventKind::Modify(ModifyKind::Name(RenameMode::To))

@@ -6,6 +6,8 @@ use notify::event::{ModifyKind, RemoveKind, RenameMode};
 use notify::*;
 use notify_debouncer_full::new_debouncer;
 
+use std::fmt::Debug;
+use std::sync::Mutex;
 use std::{fs, path::PathBuf, thread, time::Duration};
 
 use crate::*;
@@ -14,6 +16,9 @@ const ICON_NOTHING: &str = "";
 const ICON_INFO: &str = "";
 const ICON_SUCCESS: &str = "";
 const ICON_WARNING: &str = "";
+
+static EVENT_BUFFER: LazyLock<Mutex<Buffer<(String, EventKind)>>> =
+    LazyLock::new(|| Mutex::new(Buffer::with_capacity(9)));
 
 /// Internal
 pub(crate) enum QueueTask {
@@ -71,8 +76,14 @@ impl<'a> Watch<'a> {
     }
 
     pub fn watch(&mut self, path: &str, f: impl FnOnce(&mut Ruleset<'a>)) -> &mut Self {
-        self.rules.push(Ruleset::new(path.into()).unwrap());
-        f(self.rules.last_mut().unwrap());
+        let path: PathBuf = path.into();
+        match path.exists() {
+            true => {
+                self.rules.push(Ruleset::new(path).unwrap());
+                f(self.rules.last_mut().unwrap());
+            }
+            false => println!("\x1b[31m# skipping {}\x1b[0m", path.display()),
+        }
         self
     }
 
@@ -111,13 +122,6 @@ impl<'a> Watch<'a> {
 
     fn handle_move_task(&self, task: QueueTask, event_name: &str) {
         match task {
-            QueueTask::None => return,
-
-            q @ QueueTask::Err(_)
-            | q @ QueueTask::Ok(_)
-            | q @ QueueTask::Info(_)
-            | q @ QueueTask::Path(_) => q,
-
             QueueTask::Move { src, mut dest } => {
                 // TODO: what to do with this?
                 // if dest.to_string_lossy().len() > 259 {
@@ -148,13 +152,14 @@ impl<'a> Watch<'a> {
                     }
                 }
             }
+            rest => rest,
         }
         .print_done(event_name);
     }
 
     fn watch_one(
         &self,
-        scheduler: &'_ Sender<Schedule<'_>>,
+        scheduler: &'_ Sender<Schedule>,
         rule: &'_ Ruleset<'_>,
     ) -> notify::Result<()> {
         let Ruleset {
@@ -178,13 +183,19 @@ impl<'a> Watch<'a> {
         } else {
             ""
         };
+
         println!("\x1b[37m# watching {}\x1b[0m", path.join(mode).display());
 
         for result in rx {
             match result {
                 Ok(events) => {
+                    let buf = &mut EVENT_BUFFER.lock().ok().unwrap();
                     events.iter().for_each(|event| {
                         let path = event.paths.last().unwrap();
+                        let event_name = kind_to_str(event.kind);
+                        let file_stem = path.file_stem().unwrap().to_string_lossy().to_string();
+                        let prev = buf.get_with_key(&file_stem);
+
                         for inner in &rule.tasks {
                             let task = inner.task.lock().unwrap();
 
@@ -197,16 +208,17 @@ impl<'a> Watch<'a> {
                             match task.event_check {
                                 None => continue,
                                 Some(f) => {
-                                    if !f(event.kind) {
+                                    if !f(event.kind, prev) {
                                         continue;
                                     }
                                 }
                             };
 
                             let queue_task = task.parse(path.to_owned(), inner.dest.to_owned());
-                            let event_name = kind_to_str(event.kind);
                             scheduler.send(Schedule(queue_task, event_name));
                         }
+
+                        buf.push((file_stem, event.kind));
                     });
                 }
                 Err(errors) => errors.iter().for_each(|error| eprintln!("{error:?}")),
@@ -246,5 +258,39 @@ fn kind_to_str<'a>(event_kind: EventKind) -> &'a str {
         },
 
         EventKind::Other => "other",
+    }
+}
+
+struct Buffer<T>(Vec<T>);
+
+impl<T> Default for Buffer<T> {
+    fn default() -> Self {
+        Self::with_capacity(9)
+    }
+}
+
+impl<T> Buffer<T> {
+    fn with_capacity(capacity: usize) -> Self {
+        Self(Vec::with_capacity(capacity))
+    }
+
+    fn push(&mut self, item: T) {
+        if self.0.len() == self.0.capacity() {
+            self.0.remove(0);
+        }
+        self.0.push(item);
+    }
+
+    fn remove(&mut self, idx: usize) -> T {
+        self.0.remove(idx)
+    }
+}
+
+impl<K: std::cmp::PartialEq, V> Buffer<(K, V)> {
+    fn get_with_key(&mut self, needle: &K) -> Option<V> {
+        self.0
+            .iter()
+            .position(|(k, _)| *k == *needle)
+            .map(|idx| self.remove(idx).1)
     }
 }
