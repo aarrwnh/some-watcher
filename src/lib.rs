@@ -48,12 +48,12 @@ impl ColoredPath for std::path::PathBuf {
                 Prefix(c) => Some((if i == 1 { M } else { Y }, c.as_os_str().to_str().unwrap())),
                 _ => None,
             } {
-                let code = match i {
-                    _ if h == M => 37,
-                    1 => 36,
-                    _ => 37,
-                };
                 res.push(if h == Y || h == M {
+                    let code = match i {
+                        _ if h == M => 37,
+                        1 => 36,
+                        _ => 37,
+                    };
                     color!(code, s)
                 } else {
                     s.to_string()

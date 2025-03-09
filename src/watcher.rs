@@ -13,7 +13,7 @@ use crate::*;
 
 const ICON_NOTHING: &str = "";
 const ICON_INFO: &str = "";
-const ICON_SUCCESS: &str = "";
+const ICON_SUCCESS: &str = " "; // 
 const ICON_WARNING: &str = "";
 
 static EVENT_BUFFER: LazyLock<Mutex<Buffer<(String, EventKind)>>> =
@@ -187,7 +187,9 @@ impl<'a> Watch<'a> {
         'recv: for result in rx {
             match result {
                 Ok(events) => {
-                    let Some(buf) = &mut EVENT_BUFFER.lock().ok() else { continue 'recv };
+                    let Some(buf) = &mut EVENT_BUFFER.lock().ok() else {
+                        continue 'recv;
+                    };
 
                     events.iter().for_each(|event| {
                         let path = event.paths.last().expect("last event path");
