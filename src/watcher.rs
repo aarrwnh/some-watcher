@@ -2,7 +2,6 @@
 #![allow(unused_must_use)]
 
 use crossbeam_channel::{bounded, Sender};
-use notify::event::{ModifyKind, RemoveKind, RenameMode};
 use notify::*;
 use notify_debouncer_full::new_debouncer;
 
@@ -30,10 +29,10 @@ pub(crate) enum QueueTask {
     None,
 }
 
-struct Schedule<'e>(QueueTask, &'e str);
+struct Schedule(QueueTask);
 
 impl QueueTask {
-    fn print_done(self, event_name: &str) {
+    fn print_done(self) {
         let (code, icon, msg) = match self {
             Self::Path(src) => (33, ICON_NOTHING, src.color_path()),
             Self::Info(msg) => (37, ICON_INFO, msg),
@@ -41,8 +40,7 @@ impl QueueTask {
             Self::Err(msg) => (31, ICON_WARNING, msg),
             _ => return,
         };
-        let e = &event_name[..3].to_uppercase();
-        println!(" {} {} {msg}", color!(IGNORED_COLOR, e), color!(code, icon));
+        println!(" {} {msg}", color!(code, icon));
     }
 }
 
@@ -111,8 +109,8 @@ impl<'a> Watch<'a> {
             thread::Builder::new()
                 .name("queue_rx".into())
                 .spawn_scoped(s, || {
-                    for Schedule(queue_task, event_name) in queue_rx {
-                        self.handle_move_task(queue_task, event_name);
+                    for Schedule(queue_task) in queue_rx {
+                        self.handle_move_task(queue_task);
                     }
                 })
                 .unwrap();
@@ -120,7 +118,7 @@ impl<'a> Watch<'a> {
         Ok(())
     }
 
-    fn handle_move_task(&self, task: QueueTask, event_name: &str) {
+    fn handle_move_task(&self, task: QueueTask) {
         match task {
             QueueTask::Move { src, mut dest } => {
                 // TODO: what to do with this?
@@ -154,7 +152,7 @@ impl<'a> Watch<'a> {
             }
             rest => rest,
         }
-        .print_done(event_name);
+        .print_done();
     }
 
     fn watch_one(
@@ -186,13 +184,13 @@ impl<'a> Watch<'a> {
 
         println!("\x1b[37m# watching {}\x1b[0m", path.join(mode).display());
 
-        for result in rx {
+        'recv: for result in rx {
             match result {
                 Ok(events) => {
-                    let buf = &mut EVENT_BUFFER.lock().ok().unwrap();
+                    let Some(buf) = &mut EVENT_BUFFER.lock().ok() else { continue 'recv };
+
                     events.iter().for_each(|event| {
-                        let path = event.paths.last().unwrap();
-                        let event_name = kind_to_str(event.kind);
+                        let path = event.paths.last().expect("last event path");
                         let file_stem = path.file_stem().unwrap().to_string_lossy().to_string();
                         let prev = buf.get_with_key(&file_stem);
 
@@ -215,7 +213,7 @@ impl<'a> Watch<'a> {
                             };
 
                             let queue_task = task.parse(path.to_owned(), inner.dest.to_owned());
-                            scheduler.send(Schedule(queue_task, event_name));
+                            scheduler.send(Schedule(queue_task));
                         }
 
                         buf.push((file_stem, event.kind));
@@ -226,38 +224,6 @@ impl<'a> Watch<'a> {
         }
 
         Ok(())
-    }
-}
-
-// TODO: this is temp?
-fn kind_to_str<'a>(event_kind: EventKind) -> &'a str {
-    match event_kind {
-        EventKind::Any => "any",
-        EventKind::Access(_) => "access",
-        EventKind::Create(_) => "create",
-
-        EventKind::Modify(modify) => match modify {
-            ModifyKind::Data(_) => "ModifyKind::Data(_)",
-            ModifyKind::Metadata(_) => "ModifyKind::Metadata(_)",
-            ModifyKind::Name(rename) => match rename {
-                RenameMode::Any => "RenameMode::Any",
-                RenameMode::To => "RenameMode::To",
-                RenameMode::From => "RenameMode::From",
-                RenameMode::Both => "RenameMode::Both",
-                RenameMode::Other => "RenameMode::Other",
-            },
-            ModifyKind::Other => "ModifyKind::Other",
-            _ => "modify",
-        },
-
-        EventKind::Remove(remove) => match remove {
-            RemoveKind::Any => "RemoveKind::Any",
-            RemoveKind::File => "RemoveKind::File",
-            RemoveKind::Folder => "RemoveKind::Folder",
-            RemoveKind::Other => "RemoveKind::Other",
-        },
-
-        EventKind::Other => "other",
     }
 }
 
