@@ -1,9 +1,8 @@
-use notify::{
-    event::{ModifyKind, RenameMode},
-    EventKind,
-    RecursiveMode,
-};
 use normalize_path::NormalizePath;
+use notify::{
+    EventKind, RecursiveMode,
+    event::{ModifyKind, RenameMode},
+};
 use regex::Regex;
 
 use std::{
@@ -13,6 +12,7 @@ use std::{
 
 use crate::watcher::QueueTask;
 
+#[must_use]
 pub trait Module: Sync + Send + 'static {
     fn resolve(&mut self, src: PathBuf, dest: PathBuf) -> Resolved;
 }
@@ -47,6 +47,7 @@ pub(crate) enum WatchingKind {
 // ----------------------------------------------------------------------------------
 type EventCheck = dyn Fn(EventKind, Option<EventKind>) -> bool + Send + Sync;
 
+#[must_use]
 #[derive(Default)]
 pub struct Task<'a> {
     label: Option<&'a str>,
@@ -183,6 +184,7 @@ impl<'a> Task<'a> {
 // ----------------------------------------------------------------------------------
 //   - Ruleset -
 // ----------------------------------------------------------------------------------
+#[must_use]
 pub struct Ruleset<'a> {
     pub(crate) watched_path: PathBuf,
     pub(crate) tasks: Vec<InnerTask<'a>>,
@@ -230,7 +232,7 @@ impl<'a> Ruleset<'a> {
         let watched_path = self.watched_path.clone();
         let mut dest: Option<_> = None;
         // adjust task to parent rule
-        let _ = task.lock().is_ok_and(|task| {
+        _ = task.lock().is_ok_and(|task| {
             if task.event_check.is_none() {
                 panic!(
                     "required watch event for {} task missing ",

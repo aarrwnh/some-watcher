@@ -1,7 +1,7 @@
 #![allow(clippy::unused_io_amount)]
 #![allow(unused_must_use)]
 
-use crossbeam_channel::{bounded, Sender};
+use crossbeam_channel::{Sender, bounded};
 use notify::*;
 use notify_debouncer_full::new_debouncer;
 
@@ -44,6 +44,13 @@ impl QueueTask {
     }
 }
 
+fn parse_args() -> std::collections::HashMap<String, String> {
+    std::env::args()
+        .skip(1)
+        .filter_map(|s| s.split_once('=').map(|(a, b)| (a.to_owned(), b.to_owned())))
+        .collect()
+}
+
 #[derive(Default, Debug)]
 pub struct Config {
     /// Location for duplicate files for later inspection
@@ -58,6 +65,8 @@ pub struct Config {
 pub struct Watch<'a> {
     config: Config,
     rules: Vec<Ruleset<'a>>,
+
+    filter: Option<String>,
 }
 
 impl<'a> Watch<'a> {
@@ -67,13 +76,20 @@ impl<'a> Watch<'a> {
             std::fs::create_dir_all(dump_folder).expect("should create new dump folder");
         }
         config.poll_interval.get_or_insert(Duration::from_secs(2));
+
+        let mut args = parse_args();
+
         Self {
             config,
             rules: Vec::new(),
+            filter: args.remove_entry("--filter").map(|(_, v)| v),
         }
     }
 
     pub fn watch(&mut self, path: &str, f: impl FnOnce(&mut Ruleset<'a>)) -> &mut Self {
+        if self.filter.as_ref().is_some_and(|f| !path.contains(f)) {
+            return self;
+        }
         let path: PathBuf = path.into();
         match path.exists() {
             true => {
