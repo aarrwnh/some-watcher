@@ -4,7 +4,7 @@ mod ruleset;
 pub use ruleset::*;
 
 mod watcher;
-pub use watcher::{Config, Watch};
+pub use watcher::{Config, Watch, Msg};
 
 pub use notify::Result;
 pub use notify::EventKind;
@@ -48,7 +48,7 @@ impl ColoredPath for std::path::PathBuf {
                 Prefix(c) => Some((if i == 1 { M } else { Y }, c.as_os_str().to_str().unwrap())),
                 _ => None,
             } {
-                res.push(if h == Y || h == M {
+                res.insert(0, if h == Y || h == M {
                     let code = match i {
                         _ if h == M => 37,
                         1 => 36,
@@ -60,7 +60,6 @@ impl ColoredPath for std::path::PathBuf {
                 });
             };
         }
-        res.reverse();
         res.join(&SEP)
     }
 }
