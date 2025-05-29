@@ -31,16 +31,21 @@ pub(crate) enum QueueTask {
 
 struct Schedule(QueueTask);
 
+pub enum Msg {
+    None,
+    Text(String),
+}
+
 impl QueueTask {
-    fn print_done(self) {
+    fn print_done(self) -> Msg {
         let (code, icon, msg) = match self {
             Self::Path(src) => (33, ICON_NOTHING, src.color_path()),
             Self::Info(msg) => (37, ICON_INFO, msg),
             Self::Ok(msg) => (32, ICON_SUCCESS, msg),
             Self::Err(msg) => (31, ICON_WARNING, msg),
-            _ => return,
+            _ => return Msg::None,
         };
-        println!(" {} {msg}", color!(code, icon));
+        Msg::Text(format!(" {} {msg}", color!(code, icon)))
     }
 }
 
@@ -101,7 +106,7 @@ impl<'a> Watch<'a> {
         self
     }
 
-    pub fn start(&mut self) -> notify::Result<()> {
+    pub fn start(&mut self, send_print: impl Fn(Msg) + Send + Sync) -> notify::Result<()> {
         let (queue_tx, queue_rx) = bounded(1);
         thread::scope(|s| {
             // create watchers for each directory
@@ -119,22 +124,22 @@ impl<'a> Watch<'a> {
                             };
                         };
                     })
-                    .unwrap();
+                    .expect("building watcher");
             }
 
             thread::Builder::new()
                 .name("queue_rx".into())
                 .spawn_scoped(s, || {
                     for Schedule(queue_task) in queue_rx {
-                        self.handle_move_task(queue_task);
+                        send_print(self.handle_move_task(queue_task));
                     }
                 })
-                .unwrap();
+                .expect("building queue");
         });
         Ok(())
     }
 
-    fn handle_move_task(&self, task: QueueTask) {
+    fn handle_move_task(&self, task: QueueTask) -> Msg {
         match task {
             QueueTask::Move { src, mut dest } => {
                 // TODO: what to do with this?
@@ -168,7 +173,7 @@ impl<'a> Watch<'a> {
             }
             rest => rest,
         }
-        .print_done();
+        .print_done()
     }
 
     fn watch_one(
