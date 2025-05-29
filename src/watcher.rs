@@ -6,7 +6,9 @@ use notify::*;
 use notify_debouncer_full::new_debouncer;
 
 use std::fmt::Debug;
+use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{fs, path::PathBuf, thread, time::Duration};
 
 use crate::*;
@@ -107,14 +109,18 @@ impl<'a> Watch<'a> {
     }
 
     pub fn start(&mut self, send_print: impl Fn(Msg) + Send + Sync) -> notify::Result<()> {
-        let (queue_tx, queue_rx) = bounded(1);
+        let (queue_tx, queue_rx) = bounded(0);
         thread::scope(|s| {
+            let mut attached = Vec::new();
+
             // create watchers for each directory
             for rule in &self.rules {
+                let flag = Arc::new(Mutex::new(AtomicBool::new(false)));
+                attached.push(flag.clone());
                 thread::Builder::new()
                     .name(format!("watcher#{}", rule.watched_path.display()))
                     .spawn_scoped(s, || {
-                        if let Err(error) = self.watch_one(&queue_tx, rule) {
+                        if let Err(error) = self.watch_one(&queue_tx, rule, flag) {
                             use notify::ErrorKind as E;
                             match error.kind {
                                 E::PathNotFound => {
@@ -135,6 +141,19 @@ impl<'a> Watch<'a> {
                     }
                 })
                 .expect("building queue");
+
+            // wait for all watchers to initialize?
+            loop {
+                let count = attached
+                    .iter()
+                    .filter(|x| x.lock().unwrap().load(Ordering::SeqCst))
+                    .count();
+                if count == self.rules.len() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            println!("\x1b[37m# --------\x1b[0m");
         });
         Ok(())
     }
@@ -180,6 +199,7 @@ impl<'a> Watch<'a> {
         &self,
         scheduler: &'_ Sender<Schedule>,
         rule: &'_ Ruleset<'_>,
+        flag: Arc<Mutex<AtomicBool>>,
     ) -> notify::Result<()> {
         let Ruleset {
             watched_path: path,
@@ -187,7 +207,7 @@ impl<'a> Watch<'a> {
             ..
         } = rule;
 
-        let (tx, rx) = bounded(1);
+        let (tx, rx) = bounded(0);
         let mut debouncer = new_debouncer(
             rule.poll_interval
                 .or(self.config.poll_interval)
@@ -204,6 +224,9 @@ impl<'a> Watch<'a> {
         };
 
         println!("\x1b[37m# watching {}\x1b[0m", path.join(mode).display());
+        flag.lock()
+            .unwrap()
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |_| Some(true));
 
         'recv: for result in rx {
             match result {
